@@ -6,8 +6,8 @@ CFLAGS=-Wall -W -g -Werror
 
 all: client server
 
-client: client.cpp raw.c
-	$(CC) client.cpp raw.c $(CFLAGS) -o client
+client: client.cpp raw.cpp
+	$(CC) client.cpp raw.cpp $(CFLAGS) -o client
 
 server: server.cpp 
 	$(CC) server.cpp $(CFLAGS) -o server
