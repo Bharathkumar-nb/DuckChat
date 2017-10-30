@@ -16,6 +16,8 @@
 #define USERNAME_MAX 32
 #define CHANNEL_MAX 32
 #define SAY_MAX 64
+#define USERS_MAX 10
+#define CHANNELS_MAX 10
 
 /* Define some types for designating request and text codes */
 typedef int request_t;
@@ -108,7 +110,7 @@ struct channel_info {
 struct text_list {
         text_t txt_type; /* = TXT_LIST */
         int txt_nchannels;
-        struct channel_info txt_channels[0]; // May actually be more than 0
+        struct channel_info txt_channels[CHANNELS_MAX]; // May actually be more than 0
 } packed;
 
 /* This is a substructure used by text_who. */
@@ -120,7 +122,7 @@ struct text_who {
         text_t txt_type; /* = TXT_WHO */
         int txt_nusernames;
         char txt_channel[CHANNEL_MAX]; // The channel requested
-        struct user_info txt_users[0]; // May actually be more than 0
+        struct user_info txt_users[USERS_MAX]; // May actually be more than 0
 } packed;
 
 struct text_error {
