@@ -9,8 +9,12 @@
 #include <unistd.h>
 #include <cstring>
 #include <errno.h>
+#include <vector>
+#include <algorithm>
 #include "duckchat.h"
 #include "raw.h"
+
+#define MAX_CLIENT_BUF_SIZE 385
 
 using namespace std;
 
@@ -18,22 +22,41 @@ class Client{
     string host_name;
     string port;
     string username;
+    string input;
     int sock_fd;
-    struct addrinfo *server_info;    
+    struct addrinfo *server_info;
+    vector<string> channels_list;
 
     public:
     Client(string host_name, string port, string username):host_name(host_name),port(port),username(username){
+
+        set_sockfd_serverinfo();
+
         send_login_req();
+        channels_list.push_back("Common");
+        send_join_req(channels_list.back());
+
+        raw_mode();
+        begin_chat();
     }
 
-    void send_login_req() {
+
+    ~Client() {
+        cooked_mode();
+        freeaddrinfo(server_info);
+    }
+
+    void display_members(){
+        cout << host_name << endl;
+        cout << port << endl;
+        cout << username << endl;
+    }
+
+    private:
+    void set_sockfd_serverinfo() {
         struct addrinfo hints;
         int ret_val;
-        int num_bytes;
-        void *req = new struct request_login;
-        ((struct request_login*) req)->req_type = REQ_LOGIN;
-        strcpy(((struct request_login*)req)->req_username, username.c_str());
- 
+
         memset(&hints, 0, sizeof(hints));
         hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_DGRAM;
@@ -52,22 +75,251 @@ class Client{
         }
         if (server_info == NULL) {
             fprintf(stderr, "Failed to create socket\n");
-            return;
-        }
-        if ((num_bytes = sendto(sock_fd, req, sizeof(struct request_login), 0, server_info->ai_addr, server_info->ai_addrlen)) == -1) {
-            perror("send_login_req - sendto");
             exit(1);
         }
     }
 
-    ~Client() {
-        freeaddrinfo(server_info);
+    void send_request(void* msg, int msgLength) {
+        int num_bytes;
+        if ((num_bytes = sendto(sock_fd, msg, msgLength, 0, server_info->ai_addr, server_info->ai_addrlen)) == -1) {
+            perror("sendto");
+            exit(1);
+        }
     }
 
-    void display_members(){
-        cout << host_name << endl;
-        cout << port << endl;
-        cout << username << endl;
+    void send_login_req() {
+        struct request_login *req = new struct request_login;
+        req->req_type = REQ_LOGIN;
+        strcpy(req->req_username, username.c_str());
+ 
+        send_request(req, sizeof(struct request_login));
+    }
+
+    void send_join_req(string channel) {
+        struct request_join *req = new struct request_join;
+        req->req_type = REQ_JOIN;
+        strcpy(req->req_channel, channel.c_str());
+
+        send_request(req, sizeof(struct request_join));
+    }
+
+    void send_leave_req(string channel) {
+        struct request_leave *req = new struct request_leave;
+        req->req_type = REQ_LEAVE;
+        strcpy(req->req_channel, channel.c_str());
+        
+        send_request(req, sizeof(struct request_leave));
+    }
+
+    void send_list_req() {
+        struct request_list *req = new struct request_list;
+        req->req_type = REQ_LIST;
+
+        send_request(req, sizeof(struct request_list));
+    }
+
+    void send_who_req(string channel) {
+        struct request_who *req = new struct request_who;
+        req->req_type = REQ_WHO;
+        strcpy(req->req_channel, channel.c_str());
+
+        send_request(req, sizeof(struct request_who));
+    }
+
+    void send_say_req(string text) {
+        struct request_say *req = new struct request_say;
+        req->req_type = REQ_SAY;
+        strcpy(req->req_channel, channels_list.back().c_str());
+        strcpy(req->req_text, text.c_str());
+
+        send_request(req, sizeof(struct request_say));
+    }
+
+    void send_logout_req() {
+        struct request_logout *req = new struct request_logout;
+        req->req_type = REQ_LOGOUT;
+
+        send_request(req, sizeof(struct request_logout));
+    }
+
+    void begin_chat() {
+        fd_set read_fds;
+        fd_set master_read_fds;
+        fd_set write_fds;
+        fd_set master_write_fds;
+                
+        char in;
+        int fdmax;
+        int num_bytes;
+        struct sockaddr_storage client_addr;
+        socklen_t addr_len = sizeof(struct sockaddr_in);
+        void *buf = new char[MAX_CLIENT_BUF_SIZE];
+        bool isRead = false;
+
+        FD_ZERO(&read_fds);
+        FD_ZERO(&master_read_fds);
+        FD_ZERO(&write_fds);
+        FD_ZERO(&master_write_fds);
+
+        FD_SET(0, &master_read_fds);
+        FD_SET(1, &master_write_fds);
+        FD_SET(sock_fd, &master_read_fds);
+
+        fdmax = sock_fd;
+        cout << "> ";
+        fflush(0);
+        while (1) {
+            read_fds = master_read_fds;
+            write_fds = master_write_fds;
+
+            if (select(fdmax+1, &read_fds, &write_fds, NULL, NULL) == -1) {
+                perror("select");
+                exit(4);
+            }
+            if (FD_ISSET(0, &read_fds)) {
+                in = getchar();
+                if (in == 10) {
+                    if(process_user_input())
+                        break;
+                }
+                else {
+                    if (input.length() < SAY_MAX) {
+                        input += in;
+                        isRead = true;
+                    }
+                }
+            }
+            if (FD_ISSET(1, &write_fds)) {
+                if (isRead){
+                    putchar(in);
+                    //fflush(0);
+                    isRead = false;
+                }
+            }
+            if(FD_ISSET(sock_fd, &read_fds)) {
+                if((num_bytes = recvfrom(sock_fd, buf, MAX_CLIENT_BUF_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len)) == -1) {
+                    perror("recvfrom");
+                    exit(1);
+                }
+                switch (((struct text *)buf)->txt_type) {
+                    case TXT_SAY: process_say_msg((struct text_say *)buf);
+                                break;
+                    case TXT_LIST: process_list_msg((struct text_list *)buf);
+                                break;
+                    case TXT_WHO: process_who_msg((struct text_who *)buf);
+                                break;
+                    case TXT_ERROR: process_error_msg((struct text_error *)buf);
+                                break;
+                    default: break;
+                }
+            }
+        }
+    }
+
+    int process_user_input() {
+        if (input.find("/join ") == 0) {
+            string channel = input.substr(6);
+            if (channel.length() <= CHANNEL_MAX) {
+                if (find(channels_list.begin(), channels_list.end(), channel) == channels_list.end()) {
+                    channels_list.push_back(channel);
+                    send_join_req(channel);
+                }
+                else{
+                    cout << "You have already subscribed to the channel: " << channel;
+                }
+            }
+            else
+                cout << "Channel name length limit exceeded";
+        }
+        else if (input.find("/leave ") == 0) {
+            string channel = input.substr(7);
+            auto it = find(channels_list.begin(), channels_list.end(), channel);
+            if (it == channels_list.end()) {
+                cout << "Error: Channel \'" << channel << "\' not found";
+            }
+            else {
+                channels_list.erase(it);
+                send_leave_req(channel);
+            }
+        }
+        else if (input.find("/switch ") == 0) {
+            string channel = input.substr(8);
+            auto it = find(channels_list.begin(), channels_list.end(), channel);
+            if (it == channels_list.end()) {
+                cout << "Error: Channel \'" << channel << "\' not found";
+            }
+            else {
+                channels_list.erase(it);
+                channels_list.push_back(channel);
+            }
+        }
+        else if (input == "/list") {
+            send_list_req();
+        }
+        else if (input.find("/who ") == 0) {
+            string channel = input.substr(5);
+            if (channel.length() <= CHANNEL_MAX) {
+                send_who_req(channel);
+            }
+            else {
+                cout << "Channel name length limit exceeded";
+            }
+        }
+        else if (input == "/exit") {
+            send_logout_req();
+            return 1;
+        }
+        else if (input[0] == '/') {
+            cout << "Invalid command" << endl;
+        }
+        else if (input.length() <= SAY_MAX){
+            send_say_req(input);
+        }
+        input = "";
+        cout << "\n";
+        cout << "> ";
+        return 0;
+    }
+
+    void process_say_msg(struct text_say *msg) {
+        clear_buffer();
+        cout << "[" << string(msg->txt_channel) << "] [" << string(msg->txt_username) << "]";
+        cout << ": " << string(msg->txt_text) << "\n";
+        reinsert_buffer();
+    }
+
+    void process_list_msg(struct text_list *msg) {
+        clear_buffer();
+        cout << "Existing channels:" << "\n";
+        for (int i = 0; i < msg->txt_nchannels; ++i) {
+            cout << string(msg->txt_channels[i].ch_channel) << "\n";
+        }
+        reinsert_buffer();
+    }
+
+    void process_who_msg(struct text_who *msg) {
+        clear_buffer();
+        cout << "Users on channel" << string(msg->txt_channel) << ":" << "\n";
+        for (int i = 0; i < msg->txt_nusernames; ++i) {
+            cout << string(msg->txt_users[i].us_username) << "\n";
+        }
+        reinsert_buffer();
+    }
+
+    void process_error_msg(struct text_error *msg) {
+        clear_buffer();
+        cout << "Error: " << string(msg->txt_error) << "\n";
+        reinsert_buffer();
+    }
+
+    void clear_buffer() {
+        for (unsigned int i = 0; i < input.length()+2; ++i) {
+            cout << "\b \b";
+        }        
+    }
+
+    void reinsert_buffer() {
+        cout << "> " << input;
     }
 };
 
