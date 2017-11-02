@@ -8,7 +8,6 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <time.h>
 #include <cstring>
 #include <errno.h>
 #include <unordered_map>
@@ -27,7 +26,7 @@ class Server{
     string port;
     int listner_fd;
     unordered_map<string, vector<string>> channel_to_ipPortList_map;
-    unordered_map<string, tuple<string, struct sockaddr *, time_t>> ipPort_to_usrInfo_map;
+    unordered_map<string, pair<string, struct sockaddr *>> ipPort_to_usrInfo_map;
 
     public:
     Server(string host_address, string port):host_address(host_address), port(port) {
@@ -83,112 +82,54 @@ class Server{
         freeaddrinfo(server_info);
     }
 
-    void check_connection_timeout(){
-        time_t now;
-        double seconds;
-
-        time(&now);
-        for(auto map_it = ipPort_to_usrInfo_map.begin(); map_it != ipPort_to_usrInfo_map.end();){
-            seconds = difftime(now, get<2>((*map_it).second));
-            if(seconds > 5) {
-                map_it = delete_user_info((*map_it).first);
-            }
-            else {
-                ++map_it;
-            }
-        }
-    }
-
-    unordered_map<string, tuple<string, struct sockaddr *, time_t>>::iterator delete_user_info(string key) {
-        for (auto map_it = channel_to_ipPortList_map.begin(); map_it != channel_to_ipPortList_map.end();) {
-            auto it = std::find((*map_it).second.begin(), (*map_it).second.end(), key);
-            if (it != (*map_it).second.end()) {
-                swap(*it, (*map_it).second.back());
-                (*map_it).second.pop_back();
-            }
-
-            // (*map_it).second.erase(find((*map_it).second.begin(), (*map_it).second.end(), key));
-            // Delete Channel info if the lone user in the channel logs out
-            if ((*map_it).second.size() == 0) {
-                map_it = channel_to_ipPortList_map.erase(map_it);
-            }
-            else {
-                ++map_it;
-            }
-        }
-        // Clear userinfo
-        return ipPort_to_usrInfo_map.erase(ipPort_to_usrInfo_map.find(key));
-    }
-
     void respond_clients() {
         int num_bytes;
         char *buf = new char[MAX_SERVER_BUF_SIZE];
         struct sockaddr_storage client_addr;
         socklen_t addr_len = sizeof(struct sockaddr_in);
-        fd_set read_fds;
-        fd_set master_read_fds;
-        int fdmax;
-        struct timeval tv;
-
-        tv.tv_sec = 1;
-        tv.tv_usec = 0;
-
-        FD_ZERO(&read_fds);
-        FD_ZERO(&master_read_fds);
-
-        FD_SET(listner_fd, &master_read_fds);
-        fdmax = listner_fd;
 
         while (1) {
-            read_fds = master_read_fds;
-            if (select(fdmax+1, &read_fds, NULL, NULL, &tv) == -1) {
-                perror("select");
-                exit(4);
+            if((num_bytes = recvfrom(listner_fd, buf, MAX_SERVER_BUF_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len)) == -1) {
+                perror("recvfrom");
+                exit(1);
             }
-            if(FD_ISSET(listner_fd, &read_fds)) {
-                if((num_bytes = recvfrom(listner_fd, buf, MAX_SERVER_BUF_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len)) == -1) {
-                    perror("recvfrom");
-                    exit(1);
-                }
-                switch (((struct request *)buf)->req_type) {
-                    case REQ_LOGIN:
-                        cout << "REQ_LOGIN" << endl;
-                        process_login_req((struct request_login *)buf, num_bytes, (struct sockaddr *)&client_addr);
-                        break;
-                    case REQ_LOGOUT:
-                        cout << "REQ_LOGOUT" << endl;
-                        process_logout_req(num_bytes, (struct sockaddr *)&client_addr);
-                        break;
-                    case REQ_JOIN:
-                        cout << "REQ_JOIN" << endl;
-                        process_join_req((struct request_join *)buf, num_bytes, (struct sockaddr *)&client_addr);
-                        break;
-                    case REQ_LEAVE:
-                        cout << "REQ_LEAVE" << endl;
-                        process_leave_req((struct request_leave *)buf, num_bytes, (struct sockaddr *)&client_addr);
-                        break;
-                    case REQ_SAY:
-                        cout << "REQ_SAY" << endl;
-                        process_say_req((struct request_say*) buf, num_bytes, (struct sockaddr *)&client_addr);
-                        break;
-                    case REQ_LIST:
-                        cout << "REQ_LIST" << endl;
-                        process_list_req(num_bytes, (struct sockaddr *)&client_addr);
-                        break;
-                    case REQ_WHO:
-                        cout << "REQ_WHO" << endl;
-                        process_who_req((struct request_who*)buf, num_bytes, (struct sockaddr *)&client_addr);
-                        break;
-                    case REQ_KEEP_ALIVE:
-                        cout << "REQ_KEEP_ALIVE" << endl;
-                        process_keepalive_req(num_bytes, (struct sockaddr *)&client_addr);
-                        break;
-                    default:
-                        cout << "default" << endl;
-                        process_error_req((struct sockaddr *)&client_addr, "Invalid Header");
-                }
+            switch (((struct request *)buf)->req_type) {
+                case REQ_LOGIN:
+                    cout << "REQ_LOGIN" << endl;
+                    process_login_req((struct request_login *)buf, num_bytes, (struct sockaddr *)&client_addr);
+                    break;
+                case REQ_LOGOUT:
+                    cout << "REQ_LOGOUT" << endl;
+                    process_logout_req(num_bytes, (struct sockaddr *)&client_addr);
+                    break;
+                case REQ_JOIN:
+                    cout << "REQ_JOIN" << endl;
+                    process_join_req((struct request_join *)buf, num_bytes, (struct sockaddr *)&client_addr);
+                    break;
+                case REQ_LEAVE:
+                    cout << "REQ_LEAVE" << endl;
+                    process_leave_req((struct request_leave *)buf, num_bytes, (struct sockaddr *)&client_addr);
+                    break;
+                case REQ_SAY:
+                    cout << "REQ_SAY" << endl;
+                    process_say_req((struct request_say*) buf, num_bytes, (struct sockaddr *)&client_addr);
+                    break;
+                case REQ_LIST:
+                    cout << "REQ_LIST" << endl;
+                    process_list_req(num_bytes, (struct sockaddr *)&client_addr);
+                    break;
+                case REQ_WHO:
+                    cout << "REQ_WHO" << endl;
+                    process_who_req((struct request_who*)buf, num_bytes, (struct sockaddr *)&client_addr);
+                    break;
+                case REQ_KEEP_ALIVE:
+                    cout << "REQ_KEEP_ALIVE" << endl;
+                    process_keepalive_req((struct request_keep_alive*)buf, num_bytes, (struct sockaddr *)&client_addr);
+                    break;
+                default:
+                    cout << "default" << endl;
+                    process_error_req((struct sockaddr *)&client_addr, "Invalid Header");
             }
-            check_connection_timeout();
         }
     }
 
@@ -207,23 +148,35 @@ class Server{
             string key = get_key_from_sockaddr(client_addr);
             struct sockaddr *client_copy = new struct sockaddr;
             memcpy(client_copy, client_addr, sizeof(struct sockaddr));
-            time_t now;
-            time(&now);
-            ipPort_to_usrInfo_map[key] = make_tuple(string(req->req_username), client_copy, now);
+            ipPort_to_usrInfo_map[key] = make_pair(string(req->req_username), client_copy);
         }
     }
 
     void process_logout_req(int num_bytes, struct sockaddr *client_addr) {
         string key = get_key_from_sockaddr(client_addr);
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
-            time_t now;
-            time(&now);
-            get<2>(ipPort_to_usrInfo_map[key]) = now;
             if (num_bytes != sizeof(struct request_logout)) {
                 process_error_req(client_addr, "Logout Request: Message length mismatch");
             }
             else {
-                delete_user_info(key);
+                for (auto map_it = channel_to_ipPortList_map.begin(); map_it != channel_to_ipPortList_map.end();) {
+                    auto it = std::find((*map_it).second.begin(), (*map_it).second.end(), key);
+                    if (it != (*map_it).second.end()) {
+                        swap(*it, (*map_it).second.back());
+                        (*map_it).second.pop_back();
+                    }
+
+                    // (*map_it).second.erase(find((*map_it).second.begin(), (*map_it).second.end(), key));
+                    // Delete Channel info if the lone user in the channel logs out
+                    if ((*map_it).second.size() == 0) {
+                        map_it = channel_to_ipPortList_map.erase(map_it);
+                    }
+                    else {
+                        ++map_it;
+                    }
+                }
+                // Clear userinfo
+                ipPort_to_usrInfo_map.erase(key);
             }
         }
     }
@@ -231,9 +184,6 @@ class Server{
     void process_join_req(struct request_join *req, int num_bytes, struct sockaddr *client_addr) {
         string key = get_key_from_sockaddr(client_addr);
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
-            time_t now;
-            time(&now);
-            get<2>(ipPort_to_usrInfo_map[key]) = now;
             if (num_bytes != sizeof(struct request_join)) {
                 process_error_req(client_addr, "Join Request: Message length mismatch");
             }
@@ -261,9 +211,6 @@ class Server{
     void process_leave_req(struct request_leave *req, int num_bytes, struct sockaddr *client_addr) {
         string key = get_key_from_sockaddr(client_addr);
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
-            time_t now;
-            time(&now);
-            get<2>(ipPort_to_usrInfo_map[key]) = now;
             if (num_bytes != sizeof(struct request_leave)) {
                 process_error_req(client_addr, "Leave Request: Message length mismatch");
             }
@@ -293,9 +240,6 @@ class Server{
     void process_say_req(struct request_say *req, int num_bytes, struct sockaddr *client_addr) {
         string key = get_key_from_sockaddr(client_addr);
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
-            time_t now;
-            time(&now);
-            get<2>(ipPort_to_usrInfo_map[key]) = now;
             if (num_bytes != sizeof(struct request_say)) {
                 process_error_req(client_addr, "Say Request: Message length mismatch");
             }
@@ -308,11 +252,11 @@ class Server{
                     struct text_say *msg = new struct text_say;
                     msg->txt_type = TXT_SAY;
                     memcpy(msg->txt_channel, req->req_channel, sizeof(msg->txt_channel));
-                    strcpy(msg->txt_username, get<0>(ipPort_to_usrInfo_map[key]).c_str());
+                    strcpy(msg->txt_username, ipPort_to_usrInfo_map[key].first.c_str());
                     memcpy(msg->txt_text, req->req_text, sizeof(msg->txt_text));
                     for(auto it:channel_to_ipPortList_map[channel]) {
-                        cout << get<0>(ipPort_to_usrInfo_map[it]) << " : " << get<1>(ipPort_to_usrInfo_map[it]) << endl;
-                        send_response(get<1>(ipPort_to_usrInfo_map[it]), msg, sizeof(struct text_say));
+                        cout << ipPort_to_usrInfo_map[it].first << " : " << ipPort_to_usrInfo_map[it].second << endl;
+                        send_response(ipPort_to_usrInfo_map[it].second, msg, sizeof(struct text_say));
                     }
                 }
             }
@@ -322,9 +266,6 @@ class Server{
     void process_list_req(int num_bytes, struct sockaddr *client_addr) {
         string key = get_key_from_sockaddr(client_addr);
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
-            time_t now;
-            time(&now);
-            get<2>(ipPort_to_usrInfo_map[key]) = now;
             if (num_bytes != sizeof(struct request_list)) {
                 process_error_req(client_addr, "List Request: Message length mismatch");
             }
@@ -345,9 +286,6 @@ class Server{
     void process_who_req(struct request_who *req, int num_bytes, struct sockaddr *client_addr) {
         string key = get_key_from_sockaddr(client_addr);
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
-            time_t now;
-            time(&now);
-            get<2>(ipPort_to_usrInfo_map[key]) = now;
             if (num_bytes != sizeof(struct request_who)) {
                 process_error_req(client_addr, "Who Request: Message length mismatch");
             }
@@ -362,7 +300,7 @@ class Server{
                     memcpy(msg->txt_channel, req->req_channel, sizeof(msg->txt_channel));
                     int i = 0;
                     for (auto it: channel_to_ipPortList_map[req->req_channel]) {
-                        strcpy(msg->txt_users[i++].us_username, get<0>(ipPort_to_usrInfo_map[it]).c_str());
+                        strcpy(msg->txt_users[i++].us_username, ipPort_to_usrInfo_map[it].first.c_str());
                     }
 
                     send_response(client_addr, msg, sizeof(struct text_who));
@@ -371,16 +309,14 @@ class Server{
         }
     }
     
-    void process_keepalive_req(int num_bytes, struct sockaddr *client_addr) {
+    void process_keepalive_req(struct request_keep_alive *req, int num_bytes, struct sockaddr *client_addr) {
         string key = get_key_from_sockaddr(client_addr);
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
             if (num_bytes != sizeof(struct request_keep_alive)) {
                 process_error_req(client_addr, "Keep-alive Request: Message length mismatch");
             }
             else {
-                time_t now;
-                time(&now);
-                get<2>(ipPort_to_usrInfo_map[key]) = now;
+                send_response(client_addr, req, sizeof(struct text_who));
             }
         }
     }

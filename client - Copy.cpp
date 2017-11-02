@@ -11,7 +11,6 @@
 #include <errno.h>
 #include <vector>
 #include <algorithm>
-#include <time.h>
 #include "duckchat.h"
 #include "raw.h"
 
@@ -27,7 +26,6 @@ class Client{
     int sock_fd;
     struct addrinfo *server_info;
     vector<string> channels_list;
-    time_t last_send_msg_time;
 
     public:
     Client(string host_name, string port, string username):host_name(host_name),port(port),username(username){
@@ -87,7 +85,6 @@ class Client{
             perror("sendto");
             exit(1);
         }
-        time(&last_send_msg_time);
     }
 
     void send_login_req() {
@@ -145,32 +142,19 @@ class Client{
         send_request(req, sizeof(struct request_logout));
     }
 
-    void send_keepalive_req() {
-        struct request_keep_alive *req = new struct request_keep_alive;
-        req->req_type = REQ_KEEP_ALIVE;
-
-        send_request(req, sizeof(struct request_keep_alive));
-    }
-
     void begin_chat() {
         fd_set read_fds;
         fd_set master_read_fds;
         fd_set write_fds;
         fd_set master_write_fds;
-        int fdmax;
                 
         char in;
+        int fdmax;
         int num_bytes;
         struct sockaddr_storage client_addr;
         socklen_t addr_len = sizeof(struct sockaddr_in);
         void *buf = new char[MAX_CLIENT_BUF_SIZE];
         bool isRead = false;
-        struct timeval tv;
-        time_t now;
-        double seconds;
-
-        tv.tv_sec = 1;
-        tv.tv_usec = 0;
 
         FD_ZERO(&read_fds);
         FD_ZERO(&master_read_fds);
@@ -188,7 +172,7 @@ class Client{
             read_fds = master_read_fds;
             write_fds = master_write_fds;
 
-            if (select(fdmax+1, &read_fds, &write_fds, NULL, &tv) == -1) {
+            if (select(fdmax+1, &read_fds, &write_fds, NULL, NULL) == -1) {
                 perror("select");
                 exit(4);
             }
@@ -229,11 +213,6 @@ class Client{
                                 break;
                     default: break;
                 }
-            }
-            time(&now);
-            seconds = difftime(now, last_send_msg_time);
-            if(seconds > 5) {
-                send_keepalive_req();
             }
         }
     }
