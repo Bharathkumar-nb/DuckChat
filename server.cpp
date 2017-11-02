@@ -22,12 +22,18 @@
 
 using namespace std;
 
+struct user_detail {
+    string username;
+    struct sockaddr *client_addr;
+    time_t last_recv_msg_time;
+};
+
 class Server{
     string host_address;
     string port;
     int listner_fd;
     unordered_map<string, vector<string>> channel_to_ipPortList_map;
-    unordered_map<string, tuple<string, struct sockaddr *, time_t>> ipPort_to_usrInfo_map;
+    unordered_map<string, struct user_detail> ipPort_to_usrInfo_map;
 
     public:
     Server(string host_address, string port):host_address(host_address), port(port) {
@@ -89,8 +95,8 @@ class Server{
 
         time(&now);
         for(auto map_it = ipPort_to_usrInfo_map.begin(); map_it != ipPort_to_usrInfo_map.end();){
-            seconds = difftime(now, get<2>((*map_it).second));
-            if(seconds > 5) {
+            seconds = difftime(now, (*map_it).second.last_recv_msg_time);
+            if(seconds > 120) {
                 map_it = delete_user_info((*map_it).first);
             }
             else {
@@ -99,7 +105,7 @@ class Server{
         }
     }
 
-    unordered_map<string, tuple<string, struct sockaddr *, time_t>>::iterator delete_user_info(string key) {
+    unordered_map<string, struct user_detail>::iterator delete_user_info(string key) {
         for (auto map_it = channel_to_ipPortList_map.begin(); map_it != channel_to_ipPortList_map.end();) {
             auto it = std::find((*map_it).second.begin(), (*map_it).second.end(), key);
             if (it != (*map_it).second.end()) {
@@ -117,12 +123,13 @@ class Server{
             }
         }
         // Clear userinfo
+        delete ipPort_to_usrInfo_map[key].client_addr;
         return ipPort_to_usrInfo_map.erase(ipPort_to_usrInfo_map.find(key));
     }
 
     void respond_clients() {
         int num_bytes;
-        char *buf = new char[MAX_SERVER_BUF_SIZE];
+        char buf[MAX_SERVER_BUF_SIZE];
         struct sockaddr_storage client_addr;
         socklen_t addr_len = sizeof(struct sockaddr_in);
         fd_set read_fds;
@@ -130,7 +137,7 @@ class Server{
         int fdmax;
         struct timeval tv;
 
-        tv.tv_sec = 1;
+        tv.tv_sec = 5;
         tv.tv_usec = 0;
 
         FD_ZERO(&read_fds);
@@ -193,10 +200,10 @@ class Server{
     }
 
     void process_error_req(struct sockaddr * client_addr, string err) {
-        struct text_error *msg = new struct text_error;
-        msg->txt_type = TXT_ERROR;
-        strcpy(msg->txt_error, err.c_str());
-        send_response(client_addr, msg, sizeof(struct text_error));
+        struct text_error msg;
+        msg.txt_type = TXT_ERROR;
+        strcpy(msg.txt_error, err.c_str());
+        send_response(client_addr, &msg, sizeof(struct text_error));
     }
 
     void process_login_req(struct request_login *req, int num_bytes, struct sockaddr *client_addr) {
@@ -205,11 +212,16 @@ class Server{
         }
         else {
             string key = get_key_from_sockaddr(client_addr);
-            struct sockaddr *client_copy = new struct sockaddr;
-            memcpy(client_copy, client_addr, sizeof(struct sockaddr));
             time_t now;
             time(&now);
-            ipPort_to_usrInfo_map[key] = make_tuple(string(req->req_username), client_copy, now);
+            
+            struct user_detail userinfo;
+            userinfo.username = string(req->req_username);
+            userinfo.client_addr = new struct sockaddr;
+            memcpy(userinfo.client_addr, client_addr, sizeof(struct sockaddr));
+            userinfo.last_recv_msg_time = now;
+
+            ipPort_to_usrInfo_map[key] = userinfo;
         }
     }
 
@@ -218,7 +230,7 @@ class Server{
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
             time_t now;
             time(&now);
-            get<2>(ipPort_to_usrInfo_map[key]) = now;
+            ipPort_to_usrInfo_map[key].last_recv_msg_time = now;
             if (num_bytes != sizeof(struct request_logout)) {
                 process_error_req(client_addr, "Logout Request: Message length mismatch");
             }
@@ -233,7 +245,7 @@ class Server{
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
             time_t now;
             time(&now);
-            get<2>(ipPort_to_usrInfo_map[key]) = now;
+            ipPort_to_usrInfo_map[key].last_recv_msg_time = now;
             if (num_bytes != sizeof(struct request_join)) {
                 process_error_req(client_addr, "Join Request: Message length mismatch");
             }
@@ -263,7 +275,7 @@ class Server{
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
             time_t now;
             time(&now);
-            get<2>(ipPort_to_usrInfo_map[key]) = now;
+            ipPort_to_usrInfo_map[key].last_recv_msg_time = now;
             if (num_bytes != sizeof(struct request_leave)) {
                 process_error_req(client_addr, "Leave Request: Message length mismatch");
             }
@@ -295,7 +307,7 @@ class Server{
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
             time_t now;
             time(&now);
-            get<2>(ipPort_to_usrInfo_map[key]) = now;
+            ipPort_to_usrInfo_map[key].last_recv_msg_time = now;
             if (num_bytes != sizeof(struct request_say)) {
                 process_error_req(client_addr, "Say Request: Message length mismatch");
             }
@@ -305,14 +317,13 @@ class Server{
                     process_error_req(client_addr, "Channel does not exist");
                 }
                 else {
-                    struct text_say *msg = new struct text_say;
-                    msg->txt_type = TXT_SAY;
-                    memcpy(msg->txt_channel, req->req_channel, sizeof(msg->txt_channel));
-                    strcpy(msg->txt_username, get<0>(ipPort_to_usrInfo_map[key]).c_str());
-                    memcpy(msg->txt_text, req->req_text, sizeof(msg->txt_text));
+                    struct text_say msg;
+                    msg.txt_type = TXT_SAY;
+                    memcpy(msg.txt_channel, req->req_channel, sizeof(msg.txt_channel));
+                    strcpy(msg.txt_username, ipPort_to_usrInfo_map[key].username.c_str());
+                    memcpy(msg.txt_text, req->req_text, sizeof(msg.txt_text));
                     for(auto it:channel_to_ipPortList_map[channel]) {
-                        cout << get<0>(ipPort_to_usrInfo_map[it]) << " : " << get<1>(ipPort_to_usrInfo_map[it]) << endl;
-                        send_response(get<1>(ipPort_to_usrInfo_map[it]), msg, sizeof(struct text_say));
+                        send_response(ipPort_to_usrInfo_map[it].client_addr, &msg, sizeof(struct text_say));
                     }
                 }
             }
@@ -324,20 +335,20 @@ class Server{
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
             time_t now;
             time(&now);
-            get<2>(ipPort_to_usrInfo_map[key]) = now;
+            ipPort_to_usrInfo_map[key].last_recv_msg_time = now;
             if (num_bytes != sizeof(struct request_list)) {
                 process_error_req(client_addr, "List Request: Message length mismatch");
             }
             else {
-                struct text_list *msg = new struct text_list;
-                msg->txt_type = TXT_LIST;
-                msg->txt_nchannels = channel_to_ipPortList_map.size();
+                struct text_list msg;
+                msg.txt_type = TXT_LIST;
+                msg.txt_nchannels = channel_to_ipPortList_map.size();
                 int i=0;
                 for(auto kv:channel_to_ipPortList_map){
-                    strcpy(msg->txt_channels[i++].ch_channel, kv.first.c_str());
+                    strcpy(msg.txt_channels[i++].ch_channel, kv.first.c_str());
                 }
 
-                send_response(client_addr, msg, sizeof(struct text_list));
+                send_response(client_addr, &msg, sizeof(struct text_list));
             }
         }
     }
@@ -347,7 +358,7 @@ class Server{
         if (ipPort_to_usrInfo_map.find(key) != ipPort_to_usrInfo_map.end()) {
             time_t now;
             time(&now);
-            get<2>(ipPort_to_usrInfo_map[key]) = now;
+            ipPort_to_usrInfo_map[key].last_recv_msg_time = now;
             if (num_bytes != sizeof(struct request_who)) {
                 process_error_req(client_addr, "Who Request: Message length mismatch");
             }
@@ -356,16 +367,16 @@ class Server{
                     process_error_req(client_addr, "Channel not found");
                 }
                 else {
-                    struct text_who *msg = new struct text_who;
-                    msg->txt_type = TXT_WHO;
-                    msg->txt_nusernames = channel_to_ipPortList_map[req->req_channel].size();
-                    memcpy(msg->txt_channel, req->req_channel, sizeof(msg->txt_channel));
+                    struct text_who msg;
+                    msg.txt_type = TXT_WHO;
+                    msg.txt_nusernames = channel_to_ipPortList_map[req->req_channel].size();
+                    memcpy(msg.txt_channel, req->req_channel, sizeof(msg.txt_channel));
                     int i = 0;
                     for (auto it: channel_to_ipPortList_map[req->req_channel]) {
-                        strcpy(msg->txt_users[i++].us_username, get<0>(ipPort_to_usrInfo_map[it]).c_str());
+                        strcpy(msg.txt_users[i++].us_username, ipPort_to_usrInfo_map[it].username.c_str());
                     }
 
-                    send_response(client_addr, msg, sizeof(struct text_who));
+                    send_response(client_addr, &msg, sizeof(struct text_who));
                 }
             }
         }
@@ -380,7 +391,7 @@ class Server{
             else {
                 time_t now;
                 time(&now);
-                get<2>(ipPort_to_usrInfo_map[key]) = now;
+                ipPort_to_usrInfo_map[key].last_recv_msg_time = now;
             }
         }
     }
@@ -390,9 +401,6 @@ class Server{
         if ((num_bytes = sendto(listner_fd, msg, msgLength, 0, to, sizeof(sockaddr_in))) == -1) {
             perror("sendto");
             exit(1);
-        }
-        else{
-            cout << "sent" << endl;
         }
     }
 

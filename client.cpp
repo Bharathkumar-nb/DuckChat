@@ -12,12 +12,19 @@
 #include <vector>
 #include <algorithm>
 #include <time.h>
+#include <signal.h>
 #include "duckchat.h"
 #include "raw.h"
 
 #define MAX_CLIENT_BUF_SIZE 385
 
 using namespace std;
+
+static void handle_ctrl_c(int s) {
+    cooked_mode();
+    cout << endl;
+    exit(s);
+}
 
 class Client{
     string host_name;
@@ -33,6 +40,13 @@ class Client{
     Client(string host_name, string port, string username):host_name(host_name),port(port),username(username){
 
         set_sockfd_serverinfo();
+        struct sigaction sigIntHandler;
+
+        sigIntHandler.sa_handler = handle_ctrl_c;
+        sigemptyset(&sigIntHandler.sa_mask);
+        sigIntHandler.sa_flags = 0;
+
+        sigaction(SIGINT, &sigIntHandler, NULL);
 
         send_login_req();
         channels_list.push_back("Common");
@@ -91,94 +105,88 @@ class Client{
     }
 
     void send_login_req() {
-        struct request_login *req = new struct request_login;
-        req->req_type = REQ_LOGIN;
-        strcpy(req->req_username, username.c_str());
+        struct request_login req;
+        req.req_type = REQ_LOGIN;
+        strcpy(req.req_username, username.c_str());
  
-        send_request(req, sizeof(struct request_login));
+        send_request(&req, sizeof(struct request_login));
     }
 
     void send_join_req(string channel) {
-        struct request_join *req = new struct request_join;
-        req->req_type = REQ_JOIN;
-        strcpy(req->req_channel, channel.c_str());
+        struct request_join req;
+        req.req_type = REQ_JOIN;
+        strcpy(req.req_channel, channel.c_str());
 
-        send_request(req, sizeof(struct request_join));
+        send_request(&req, sizeof(struct request_join));
     }
 
     void send_leave_req(string channel) {
-        struct request_leave *req = new struct request_leave;
-        req->req_type = REQ_LEAVE;
-        strcpy(req->req_channel, channel.c_str());
+        struct request_leave req;
+        req.req_type = REQ_LEAVE;
+        strcpy(req.req_channel, channel.c_str());
 
-        send_request(req, sizeof(struct request_leave));
+        send_request(&req, sizeof(struct request_leave));
     }
 
     void send_list_req() {
-        struct request_list *req = new struct request_list;
-        req->req_type = REQ_LIST;
+        struct request_list req;
+        req.req_type = REQ_LIST;
 
-        send_request(req, sizeof(struct request_list));
+        send_request(&req, sizeof(struct request_list));
     }
 
     void send_who_req(string channel) {
-        struct request_who *req = new struct request_who;
-        req->req_type = REQ_WHO;
-        strcpy(req->req_channel, channel.c_str());
+        struct request_who req;
+        req.req_type = REQ_WHO;
+        strcpy(req.req_channel, channel.c_str());
 
-        send_request(req, sizeof(struct request_who));
+        send_request(&req, sizeof(struct request_who));
     }
 
     void send_say_req(string text) {
-        struct request_say *req = new struct request_say;
-        req->req_type = REQ_SAY;
-        strcpy(req->req_channel, channels_list.back().c_str());
-        strcpy(req->req_text, text.c_str());
+        struct request_say req;
+        req.req_type = REQ_SAY;
+        strcpy(req.req_channel, channels_list.back().c_str());
+        strcpy(req.req_text, text.c_str());
 
-        send_request(req, sizeof(struct request_say));
+        send_request(&req, sizeof(struct request_say));
     }
 
     void send_logout_req() {
-        struct request_logout *req = new struct request_logout;
-        req->req_type = REQ_LOGOUT;
+        struct request_logout req;
+        req.req_type = REQ_LOGOUT;
 
-        send_request(req, sizeof(struct request_logout));
+        send_request(&req, sizeof(struct request_logout));
     }
 
     void send_keepalive_req() {
-        struct request_keep_alive *req = new struct request_keep_alive;
-        req->req_type = REQ_KEEP_ALIVE;
+        struct request_keep_alive req;
+        req.req_type = REQ_KEEP_ALIVE;
 
-        send_request(req, sizeof(struct request_keep_alive));
+        send_request(&req, sizeof(struct request_keep_alive));
     }
 
     void begin_chat() {
         fd_set read_fds;
         fd_set master_read_fds;
-        fd_set write_fds;
-        fd_set master_write_fds;
         int fdmax;
                 
         char in;
         int num_bytes;
         struct sockaddr_storage client_addr;
         socklen_t addr_len = sizeof(struct sockaddr_in);
-        void *buf = new char[MAX_CLIENT_BUF_SIZE];
-        bool isRead = false;
+        char buf[MAX_CLIENT_BUF_SIZE];
         struct timeval tv;
         time_t now;
         double seconds;
 
-        tv.tv_sec = 1;
+        tv.tv_sec = 30;
         tv.tv_usec = 0;
 
         FD_ZERO(&read_fds);
         FD_ZERO(&master_read_fds);
-        FD_ZERO(&write_fds);
-        FD_ZERO(&master_write_fds);
 
         FD_SET(0, &master_read_fds);
-        FD_SET(1, &master_write_fds);
         FD_SET(sock_fd, &master_read_fds);
 
         fdmax = sock_fd;
@@ -186,15 +194,13 @@ class Client{
         fflush(0);
         while (1) {
             read_fds = master_read_fds;
-            write_fds = master_write_fds;
 
-            if (select(fdmax+1, &read_fds, &write_fds, NULL, &tv) == -1) {
+            if (select(fdmax+1, &read_fds, NULL, NULL, &tv) == -1) {
                 perror("select");
                 exit(4);
             }
             if (FD_ISSET(0, &read_fds)) {
                 in = getchar();
-                //fflush(0);
                 if (in == 10) {
                     if(process_user_input())
                         break;
@@ -202,15 +208,9 @@ class Client{
                 else {
                     if (input.length() < SAY_MAX) {
                         input += in;
-                        isRead = true;
+                        putchar(in);
+                        fflush(0);
                     }
-                }
-            }
-            if (FD_ISSET(1, &write_fds)) {
-                if (isRead){
-                    putchar(in);
-                    fflush(0);
-                    isRead = false;
                 }
             }
             if(FD_ISSET(sock_fd, &read_fds)) {
@@ -232,7 +232,7 @@ class Client{
             }
             time(&now);
             seconds = difftime(now, last_send_msg_time);
-            if(seconds > 5) {
+            if(seconds > 59) {
                 send_keepalive_req();
             }
         }
@@ -257,7 +257,7 @@ class Client{
             string channel = input.substr(7);
             auto it = find(channels_list.begin(), channels_list.end(), channel);
             if (it == channels_list.end()) {
-                cout << "Error: Channel \'" << channel << "\' not found";
+                cout << "Error: Channel \'" << channel << "\' not found\n";
             }
             else {
                 channels_list.erase(it);
@@ -268,7 +268,7 @@ class Client{
             string channel = input.substr(8);
             auto it = find(channels_list.begin(), channels_list.end(), channel);
             if (it == channels_list.end()) {
-                cout << "Error: Channel \'" << channel << "\' not found";
+                cout << "Error: Channel \'" << channel << "\' not found\n";
             }
             else {
                 channels_list.erase(it);
@@ -284,11 +284,12 @@ class Client{
                 send_who_req(channel);
             }
             else {
-                cout << "Channel name length limit exceeded";
+                cout << "Error: Channel name length limit exceeded\n";
             }
         }
         else if (input == "/exit") {
             send_logout_req();
+            cout << endl;
             return 1;
         }
         else if (input[0] == '/') {
