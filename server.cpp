@@ -55,6 +55,7 @@ class Server{
         struct addrinfo hints, *server_info;
         int ret_val;
         int yes = 1;
+        int opt = 3;
         
         memset(&hints, 0, sizeof(hints));
         hints.ai_family = AF_UNSPEC;
@@ -73,6 +74,7 @@ class Server{
                 continue;
             }
             setsockopt(listner_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
+            setsockopt(listner_fd, SOL_SOCKET, SO_RCVLOWAT, &opt, sizeof(int));
             if (bind(listner_fd, server_info->ai_addr, server_info->ai_addrlen) < 0) {
                 close(listner_fd);
                 server_info = server_info->ai_next;
@@ -132,22 +134,20 @@ class Server{
         char buf[MAX_SERVER_BUF_SIZE];
         struct sockaddr_storage client_addr;
         socklen_t addr_len = sizeof(struct sockaddr_in);
-        fd_set read_fds;
-        fd_set master_read_fds;
-        int fdmax;
-        struct timeval tv;
-
-        tv.tv_sec = 5;
-        tv.tv_usec = 0;
-
-        FD_ZERO(&read_fds);
-        FD_ZERO(&master_read_fds);
-
-        FD_SET(listner_fd, &master_read_fds);
-        fdmax = listner_fd;
 
         while (1) {
-            read_fds = master_read_fds;
+            fd_set read_fds;
+            int fdmax;
+            struct timeval tv;
+
+            tv.tv_sec = 1;
+            tv.tv_usec = 0;
+
+            FD_ZERO(&read_fds);
+
+            FD_SET(listner_fd, &read_fds);
+            fdmax = listner_fd;
+
             if (select(fdmax+1, &read_fds, NULL, NULL, &tv) == -1) {
                 perror("select");
                 exit(4);

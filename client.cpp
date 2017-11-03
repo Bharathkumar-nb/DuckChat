@@ -167,33 +167,32 @@ class Client{
     }
 
     void begin_chat() {
-        fd_set read_fds;
-        fd_set master_read_fds;
-        int fdmax;
                 
         char in;
         int num_bytes;
         struct sockaddr_storage client_addr;
         socklen_t addr_len = sizeof(struct sockaddr_in);
         char buf[MAX_CLIENT_BUF_SIZE];
-        struct timeval tv;
         time_t now;
         double seconds;
 
-        tv.tv_sec = 30;
-        tv.tv_usec = 0;
-
-        FD_ZERO(&read_fds);
-        FD_ZERO(&master_read_fds);
-
-        FD_SET(0, &master_read_fds);
-        FD_SET(sock_fd, &master_read_fds);
-
-        fdmax = sock_fd;
         cout << "> ";
         fflush(0);
         while (1) {
+            fd_set read_fds;
+            fd_set master_read_fds;
+            int fdmax;
+            struct timeval tv;
+
+            tv.tv_sec = 1;
+            tv.tv_usec = 0;
             read_fds = master_read_fds;
+            FD_ZERO(&read_fds);
+
+            FD_SET(0, &read_fds);
+            FD_SET(sock_fd, &read_fds);
+
+            fdmax = sock_fd;
 
             if (select(fdmax+1, &read_fds, NULL, NULL, &tv) == -1) {
                 perror("select");
